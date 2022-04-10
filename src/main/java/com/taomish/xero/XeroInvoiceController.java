@@ -9,6 +9,7 @@ import com.taomish.xero.dto.InvoiceDTO;
 import com.taomish.xero.service.XeroInvoiceService;
 
 import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 @Controller
@@ -45,7 +46,7 @@ public class XeroInvoiceController {
 	}
 
   @GetMapping("/xero/callback")
-  public String xeroCallback(HttpServletRequest request) {
+  public String xeroCallback(HttpServletRequest request, @RequestParam(value = "code", defaultValue = "", required = true) String code, @RequestParam(value = "state", defaultValue = "", required = true) String state, @RequestParam(value = "scope") String scope, @RequestParam(value = "session_state") String sessionState, Model model) {
     String secretState = getCookie(request, "state");
     String callbackCode = "";
     if (request.getParameter("code") != null) {
@@ -53,13 +54,14 @@ public class XeroInvoiceController {
     }
     if (request.getParameter("state") != null && secretState.equals(request.getParameter("state").toString())) {
     
-      System.out.println("state matched-----");
+      System.out.println("code: " + callbackCode);
 
 
     } else {
       System.out.println("Invalid state - possible CSFR");
     }
-    return "Processing your request...";
+    model.addAttribute("code", code);
+    return "callback";
   }
 
   //Creating cookie function
