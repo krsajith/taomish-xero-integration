@@ -1,6 +1,11 @@
 package com.taomish.xero;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 import javax.servlet.http.*;
@@ -55,7 +60,50 @@ public class XeroInvoiceController {
     if (request.getParameter("state") != null && secretState.equals(request.getParameter("state").toString())) {
     
       System.out.println("code: " + callbackCode);
-
+      //String command = "curl -X POST https://postman-echo.com/post --data foo1=bar1&foo2=bar2";
+      try {
+        //Process process = Runtime.getRuntime().exec(command);
+        
+        String authorizationString = XeroClientId + ":" + XeroClientSecret;
+        String encodedAuth = Base64.getEncoder().encodeToString(authorizationString.getBytes());
+        String authHeaderValue = "Basic " + new String(encodedAuth);
+        String urlParameters = "grant_type=authorization_code&code="+callbackCode+"&redirect_uri="+XeroRedirectURL;
+        byte[] postData       = urlParameters.getBytes( StandardCharsets.UTF_8 );
+        HttpURLConnection con = (HttpURLConnection) new URL("https://identity.xero.com/connect/token").openConnection();
+        
+        con.setRequestMethod("POST");
+        con.setDoOutput(true); 
+        con.setRequestProperty("Authorization", authHeaderValue);
+        con.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+        con.getOutputStream().write(postData);
+        con.getInputStream();
+        con.connect();
+        
+        int resCode = con.getResponseCode();
+        String resMessage = con.getResponseMessage();
+        BufferedReader br = null;
+        StringBuilder sb = null;
+        if (100 <= resCode && resCode <= 399) {
+            br = new BufferedReader(new InputStreamReader(con.getInputStream()));
+            sb = new StringBuilder();
+            String output;
+            while ((output = br.readLine()) != null) {
+              sb.append(output);
+            }
+            
+        } else {
+            br = new BufferedReader(new InputStreamReader(con.getErrorStream()));
+            sb = new StringBuilder();
+            String output;
+            while ((output = br.readLine()) != null) {
+              sb.append(output);
+            }
+        }
+        System.out.println("Response from xero " + sb);
+      } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+      }
 
     } else {
       System.out.println("Invalid state - possible CSFR");
