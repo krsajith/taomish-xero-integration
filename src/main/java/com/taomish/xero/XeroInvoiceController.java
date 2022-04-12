@@ -6,26 +6,36 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+
 import java.util.*;
 
 import javax.servlet.http.*;
 
+import com.auth0.jwt.interfaces.DecodedJWT;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.taomish.xero.dto.InvoiceDTO;
 import com.taomish.xero.service.XeroInvoiceService;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
+
 @Controller
 public class XeroInvoiceController {
+
+  @Autowired
+  private JdbcTemplate jdbcTemplate;
 
   private final XeroInvoiceService xeroInvoiceService;
   private String XeroClientId = "97C62FF3B0C7417393BC515F35A0554E";
   private String XeroClientSecret = "b6mIuZ7Kz0H1wQn_HjL1jGvKcyT2G16_YBJNXxcaPV1CAw7i";
   private String XeroRedirectURL = "http://localhost:8080/xero/callback";
   private String XeroAPIScopes = "openid profile email accounting.transactions accounting.settings accounting.contacts";
-
+   
   public XeroInvoiceController(XeroInvoiceService xeroInvoiceService) {
     this.xeroInvoiceService = xeroInvoiceService;
   }
@@ -51,7 +61,7 @@ public class XeroInvoiceController {
 	}
 
   @GetMapping("/xero/callback")
-  public String xeroCallback(HttpServletRequest request, @RequestParam(value = "code", defaultValue = "", required = true) String code, @RequestParam(value = "state", defaultValue = "", required = true) String state, @RequestParam(value = "scope") String scope, @RequestParam(value = "session_state") String sessionState, Model model) {
+  public String xeroCallback(HttpServletRequest request, HttpServletResponse response, @RequestParam(value = "code", defaultValue = "", required = true) String code, @RequestParam(value = "state", defaultValue = "", required = true) String state, @RequestParam(value = "scope") String scope, @RequestParam(value = "session_state") String sessionState, Model model) {
     String secretState = getCookie(request, "state");
     String callbackCode = "";
     if (request.getParameter("code") != null) {
@@ -59,18 +69,14 @@ public class XeroInvoiceController {
     }
     if (request.getParameter("state") != null && secretState.equals(request.getParameter("state").toString())) {
     
-      System.out.println("code: " + callbackCode);
-      //String command = "curl -X POST https://postman-echo.com/post --data foo1=bar1&foo2=bar2";
       try {
-        //Process process = Runtime.getRuntime().exec(command);
-        
         String authorizationString = XeroClientId + ":" + XeroClientSecret;
         String encodedAuth = Base64.getEncoder().encodeToString(authorizationString.getBytes());
         String authHeaderValue = "Basic " + new String(encodedAuth);
         String urlParameters = "grant_type=authorization_code&code="+callbackCode+"&redirect_uri="+XeroRedirectURL;
         byte[] postData       = urlParameters.getBytes( StandardCharsets.UTF_8 );
+        //requesting xero API to get access_token with the code got after authentication
         HttpURLConnection con = (HttpURLConnection) new URL("https://identity.xero.com/connect/token").openConnection();
-        
         con.setRequestMethod("POST");
         con.setDoOutput(true); 
         con.setRequestProperty("Authorization", authHeaderValue);
@@ -80,7 +86,6 @@ public class XeroInvoiceController {
         con.connect();
         
         int resCode = con.getResponseCode();
-        String resMessage = con.getResponseMessage();
         BufferedReader br = null;
         StringBuilder sb = null;
         if (100 <= resCode && resCode <= 399) {
@@ -99,10 +104,32 @@ public class XeroInvoiceController {
               sb.append(output);
             }
         }
-        System.out.println("Response from xero " + sb);
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode jsonNode = mapper.readTree(sb.toString());
+        
+        //if received tokens in the response then the next call will be getting tenant id
+        if(jsonNode.get("access_token") != null) {
+          
+          long timeStamp = new Date().getTime();
+          String tokenExpireTime = String.valueOf(timeStamp + 1800);
+          String accessToken = jsonNode.get("access_token").asText();
+          String refreshToken = jsonNode.get("refresh_token").asText();
+          String tokenSet = jsonNode.get("id_token").asText();
+          JsonNode tenantJson = getTenant(accessToken);
+          tenantJson = tenantJson.get(0);
+          String tenantName = tenantJson.get("tenantName").asText();
+          String tenantId = tenantJson.get("tenantId").asText();
+          if(tenantJson != null) {
+            String sql = "INSERT INTO customers (customerName, companyName, realmId, accessToken, accessTokenExpire, refreshToken, tokenSet) VALUES (?, ?, ?, ?, ?, ?, ?)";
+            int tokenInsertStatus = jdbcTemplate.update(sql, tenantName, tenantName, tenantId, accessToken, tokenExpireTime, refreshToken, tokenSet);
+            if(tokenInsertStatus > 0) {
+              System.out.println("Tokens saved in DB");
+            }
+          }
+        }
+        
       } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
+        System.out.println("Error: " + e.getMessage()); 
       }
 
     } else {
@@ -111,7 +138,39 @@ public class XeroInvoiceController {
     model.addAttribute("code", code);
     return "callback";
   }
+  public JsonNode getTenant(String accessToken) {
+    JsonNode jsonNode = null;
+    try {
+      //getting tenant id
+      
+      HttpURLConnection getTenantCon = (HttpURLConnection) new URL("https://api.xero.com/connections").openConnection();
+      getTenantCon.setRequestMethod("GET");
+      getTenantCon.setDoOutput(true); 
+      getTenantCon.setRequestProperty("Authorization", "Bearer " + accessToken);
+      getTenantCon.setRequestProperty("Content-Type", "application/json");
+      //getTenantCon.getInputStream();
+      getTenantCon.connect();
+      int resTenant = getTenantCon.getResponseCode();
+      if (100 <= resTenant && resTenant <= 399) { 
+        BufferedReader tenantBr = null;
+        StringBuilder tenantSb = null;
+        tenantBr = new BufferedReader(new InputStreamReader(getTenantCon.getInputStream()));
+        tenantSb = new StringBuilder();
+        String tenantOutput;
+        while ((tenantOutput = tenantBr.readLine()) != null) {
+          tenantSb.append(tenantOutput);
+        }
+        ObjectMapper mapper = new ObjectMapper();
+        jsonNode = mapper.readTree(tenantSb.toString());
+        
+      }
+    } catch(Exception e) {
+      System.out.println("Exception : "+ e.getMessage());
+    }
+    return jsonNode;
+  }
 
+  
   //Creating cookie function
   public void saveCookie(HttpServletResponse response, String key, String value) {
     Cookie t = new Cookie(key, value);
@@ -130,5 +189,7 @@ public class XeroInvoiceController {
         }
     }
     return item;
-}
+  }
+
+  
 }
