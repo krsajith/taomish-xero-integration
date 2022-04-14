@@ -18,11 +18,8 @@
 	</properties>
 	<dependencies>
 
-		<dependency>
-			<groupId>dev.galasa</groupId>
-			<artifactId>com.auth0.jwt</artifactId>
-			<version>3.8.1</version>
-		</dependency>
+		
+		
 		<dependency>
 			<groupId>mysql</groupId>
 			<artifactId>mysql-connector-java</artifactId>
